@@ -31,9 +31,14 @@ Vector Store には PostgreSQL (pgvector) を使用しています。
     └── onboarding_manual.md
 ```
 
+本プロジェクトは Python パッケージ管理に uv を使用しています。  
+uv のメリット等は以下の記事でも解説しています：
+
+**Zenn 記事: [uv について](https://zenn.dev/dem3860/articles/9ab68cf450bae5)**
+
 ## インストール方法
 
-前提: Python 3.12+, Docker Desktop, `uv` がインストールされていること。
+前提: `uv` がインストールされていること
 
 1. **リポジトリのクローン**
 
@@ -57,6 +62,12 @@ Vector Store には PostgreSQL (pgvector) を使用しています。
 
    - `LLM_PROVIDER`: `openai` または `gemini`
    - `OPENAI_API_KEY` / `GEMINI_API_KEY`: 各種 API キー
+
+**補足**  
+個人利用の軽い用途であれば、Google Gemini の無料枠で十分に利用できます。
+
+参考リンク：  
+[Gemini API キーの取得方法（公式ドキュメント）](https://ai.google.dev/gemini-api/docs/api-key?hl=ja)
 
 4. **データベースの起動**
    ```bash
