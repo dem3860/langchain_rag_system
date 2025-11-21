@@ -56,6 +56,7 @@ class AgentState(TypedDict):
     context: str
     evaluation: str
     decision: str
+    retry_count: int
 
 
 # ========= Node 実装 =========
@@ -111,6 +112,7 @@ def generate_answer(state: AgentState):
     """質問と（あれば）コンテキストから最終回答を生成する"""
     question = state["question"]
     context = state.get("context", "")
+    evaluation = state.get("evaluation", "")
     llm = get_llm()
 
     if not context:
@@ -122,26 +124,35 @@ def generate_answer(state: AgentState):
             ),
             ("human", "{question}"),
         ])
-        chain = prompt | llm | StrOutputParser()
-        answer = chain.invoke({"question": question})
-
     else:
         # コンテキスト有り RAG パターン
+        system_prompt = """
+        あなたは社内ドキュメント検索アシスタントです。
+        以下のコンテキストを可能な限り参照しながら、ユーザの質問に答えてください。
+        コンテキストに関連情報がない場合は、
+        「提供されている社内ドキュメントの範囲では情報が見つかりませんでした。」と答えてください。
+        
+        コンテキスト:
+        {context}
+        """
+        
+        # 再生成（リトライ）の場合の指示追加
+        if evaluation == "BAD":
+            system_prompt += """
+            
+            重要: 前回の回答は不十分（BAD）と評価されました。
+            質問の意図を再確認し、コンテキストの情報をより正確に反映して回答を修正してください。
+            """
+
         prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                """
-                あなたは社内ドキュメント検索アシスタントです。
-                以下のコンテキストを可能な限り参照しながら、ユーザの質問に答えてください。
-                コンテキストに関連情報がない場合は、
-                「提供されている社内ドキュメントの範囲では情報が見つかりませんでした。」と答えてください。
-                
-                コンテキスト:
-                {context}
-                """
-            ),
+            ("system", system_prompt),
             ("human", "{question}"),
         ])
+
+    if not context:
+        chain = prompt | llm | StrOutputParser()
+        answer = chain.invoke({"question": question})
+    else:
         chain = prompt | llm | StrOutputParser()
         answer = chain.invoke({
             "question": question,
@@ -180,7 +191,8 @@ def evaluate_answer(state: AgentState):
         "last_answer": last_answer,
     }).strip()
 
-    return {"evaluation": evaluation}
+    current_retry = state.get("retry_count", 0)
+    return {"evaluation": evaluation, "retry_count": current_retry + 1}
 
 
 def final_output(state: AgentState):
@@ -224,14 +236,20 @@ def build_graph():
     # generate_answer → evaluate_answer
     workflow.add_edge("generate_answer", "evaluate_answer")
 
-    # 評価結果は今回はログ用途なので、常に final_output へ
+    # 評価結果で分岐 (BADなら再生成へループ、ただしリトライ回数制限あり)
     def route_eval(state: AgentState):
+        evaluation = state.get("evaluation")
+        retry_count = state.get("retry_count", 0)
+        
+        if evaluation == "BAD" and retry_count < 3:
+            return "generate_answer"
         return "final_output"
 
     workflow.add_conditional_edges(
         "evaluate_answer",
         route_eval,
         {
+            "generate_answer": "generate_answer",
             "final_output": "final_output",
         },
     )
