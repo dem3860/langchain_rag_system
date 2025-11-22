@@ -104,5 +104,5 @@ Agent: APIの命名規則は以下の通りです...
 - **Language**: Python 3.12
 - **Orchestration**: LangChain, LangGraph
 - **Vector Store**: PostgreSQL (pgvector)
-- **LLM**: OpenAI (GPT-4o) / Google Gemini (Gemini 1.5 Pro)
+- **LLM**: OpenAI (GPT-4o) / Google Gemini (Gemini 2.0 flash)
 - **Package Manager**: uv
