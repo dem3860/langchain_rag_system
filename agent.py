@@ -56,7 +56,6 @@ class AgentState(TypedDict):
     context: str
     evaluation: str
     decision: str
-    retry_count: int
 
 
 # ========= Node 実装 =========
@@ -112,7 +111,6 @@ def generate_answer(state: AgentState):
     """質問と（あれば）コンテキストから最終回答を生成する"""
     question = state["question"]
     context = state.get("context", "")
-    evaluation = state.get("evaluation", "")
     llm = get_llm()
 
     if not context:
@@ -124,35 +122,25 @@ def generate_answer(state: AgentState):
             ),
             ("human", "{question}"),
         ])
-    else:
-        # コンテキスト有り RAG パターン
-        system_prompt = """
-        あなたは社内ドキュメント検索アシスタントです。
-        以下のコンテキストを可能な限り参照しながら、ユーザの質問に答えてください。
-        コンテキストに関連情報がない場合は、
-        「提供されている社内ドキュメントの範囲では情報が見つかりませんでした。」と答えてください。
-        
-        コンテキスト:
-        {context}
-        """
-        
-        # 再生成（リトライ）の場合の指示追加
-        if evaluation == "BAD":
-            system_prompt += """
-            
-            重要: 前回の回答は不十分（BAD）と評価されました。
-            質問の意図を再確認し、コンテキストの情報をより正確に反映して回答を修正してください。
-            """
-
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("human", "{question}"),
-        ])
-
-    if not context:
         chain = prompt | llm | StrOutputParser()
         answer = chain.invoke({"question": question})
     else:
+        # コンテキスト有り RAG パターン
+        prompt = ChatPromptTemplate.from_messages([
+            (
+                "system",
+                """
+                あなたは社内ドキュメント検索アシスタントです。
+                以下のコンテキストを可能な限り参照しながら、ユーザの質問に答えてください。
+                コンテキストに関連情報がない場合は、
+                「提供されている社内ドキュメントの範囲では情報が見つかりませんでした。」と答えてください。
+                
+                コンテキスト:
+                {context}
+                """
+            ),
+            ("human", "{question}"),
+        ])
         chain = prompt | llm | StrOutputParser()
         answer = chain.invoke({
             "question": question,
@@ -160,44 +148,6 @@ def generate_answer(state: AgentState):
         })
 
     return {"messages": [AIMessage(content=answer)]}
-
-
-def evaluate_answer(state: AgentState):
-    """生成した回答が質問・コンテキストに対して妥当か簡易評価する"""
-    last_answer = state["messages"][-1].content
-    question = state["question"]
-    context = state.get("context", "")
-    llm = get_llm()
-
-    prompt = ChatPromptTemplate.from_template(
-        """
-        あなたは回答の品質評価者です。
-        以下の回答が、質問およびコンテキストに基づいて適切かどうかを判定してください。
-        
-        質問: {question}
-        コンテキスト: {context}
-        回答: {last_answer}
-        
-        - 質問にきちんと答えており、コンテキストも適切に活用されている場合は "GOOD"
-        - 質問に答えていない / コンテキストを無視している / 明らかに不十分な場合は "BAD"
-        とだけ出力してください。
-        """
-    )
-
-    chain = prompt | llm | StrOutputParser()
-    evaluation = chain.invoke({
-        "question": question,
-        "context": context,
-        "last_answer": last_answer,
-    }).strip()
-
-    current_retry = state.get("retry_count", 0)
-    return {"evaluation": evaluation, "retry_count": current_retry + 1}
-
-
-def final_output(state: AgentState):
-    """最終ノード（ここでは特に状態をいじらずそのまま終了）"""
-    return {}
 
 
 # ========= グラフ構築 =========
@@ -209,8 +159,6 @@ def build_graph():
     workflow.add_node("should_search", should_search)
     workflow.add_node("retrieve", retrieve)
     workflow.add_node("generate_answer", generate_answer)
-    workflow.add_node("evaluate_answer", evaluate_answer)
-    workflow.add_node("final_output", final_output)
 
     workflow.set_entry_point("receive_question")
 
@@ -233,29 +181,8 @@ def build_graph():
     # retrieve → generate_answer
     workflow.add_edge("retrieve", "generate_answer")
 
-    # generate_answer → evaluate_answer
-    workflow.add_edge("generate_answer", "evaluate_answer")
-
-    # 評価結果で分岐 (BADなら再生成へループ、ただしリトライ回数制限あり)
-    def route_eval(state: AgentState):
-        evaluation = state.get("evaluation")
-        retry_count = state.get("retry_count", 0)
-        
-        if evaluation == "BAD" and retry_count < 3:
-            return "generate_answer"
-        return "final_output"
-
-    workflow.add_conditional_edges(
-        "evaluate_answer",
-        route_eval,
-        {
-            "generate_answer": "generate_answer",
-            "final_output": "final_output",
-        },
-    )
-
-    # final_output → END
-    workflow.add_edge("final_output", END)
+    # generate_answer → END
+    workflow.add_edge("generate_answer",END)
 
     return workflow.compile()
 
