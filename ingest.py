@@ -9,6 +9,8 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_postgres import PGVector
 from langchain_core.documents import Document
+from langchain_core.indexing import index
+from langchain_classic.indexes import SQLRecordManager
 
 # 環境変数の読み込み
 load_dotenv()
@@ -79,11 +81,29 @@ def ingest():
         use_jsonb=True,
     )
 
-    # 5. 文書をベクトルストアに追加する
-    print("Adding documents to pgvector...")
-    vector_store.add_documents(splitted_docs)
+    # 5. レコードマネージャを初期化する
+    namespace = f"pgvector/{COLLECTION_NAME}"
+    record_manager = SQLRecordManager(
+        namespace=namespace,
+        db_url=DB_CONNECTION,
+    )
     
-    print("Ingestion complete!")
+    # レコードマネージャのスキーマを作成
+    print("Creating record manager schema...")
+    record_manager.create_schema()
+
+    # 6. 文書をベクトルストアに追加する
+    print("Indexing documents to pgvector with record manager...")
+    result = index(
+        splitted_docs,
+        record_manager=record_manager,
+        vector_store=vector_store,
+        cleanup="incremental",
+        source_id_key="source",
+        key_encoder="sha256"
+    )
+    
+    print(f"Ingestion complete! Added: {result['num_added']}, Updated: {result['num_updated']}, Deleted: {result['num_deleted']}, Skipped: {result['num_skipped']}")
 
 if __name__ == "__main__":
     ingest()
